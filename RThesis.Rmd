@@ -1,0 +1,378 @@
+---
+title: "R code laser ablation results"
+author: "Marijn Schaap"
+date: "2025-06"
+---
+
+```{r}
+#import data and detection limts from csv's
+
+data1 <- read.csv("MarijnDataCor.csv", sep =";")
+
+dl <- read.csv("MarijnDetLimCor.csv", sep =";")
+
+```
+
+```{r}
+#make all values numeric
+
+data1[] <- lapply(data1, function(col) {sapply(col, function(x) {if (grepl("[a-zA-Z]", x)) {
+      x} else {as.numeric(gsub(",", ".", x))}})})
+
+dl[] <- lapply(dl, function(col) {sapply(col, function(x) {if (grepl("[a-zA-Z]", x)) {
+      x} else {as.numeric(gsub(",", ".", x))}})})
+
+```
+
+```{r}
+#check if measurements are >= detection limits
+
+data_checked <- data1
+
+data_checked[] <- Map(function(meas, dl) {
+  ifelse(is.na(meas) | is.na(dl), NA,           
+         ifelse(meas < dl, NA_real_, meas))   
+}, data1, dl)
+
+```
+
+
+```{r}
+library(dplyr)
+library(tidyr)
+
+#clean headers
+
+data_mean <- data_checked %>%
+  select(-matches("^(N612|N610)\\.")) %>%
+  mutate(row_id = row_number()) %>%
+  pivot_longer(
+    cols      = matches("\\.\\d+$"),
+    names_to  = c("prefix", "num"),
+    names_sep = "\\.(?=\\d+$)",
+    values_to = "value"
+  ) %>%
+  group_by(row_id, prefix) %>%
+  
+#mean values
+  summarise(mean = mean(value, na.rm = TRUE), .groups = "drop") %>%
+  pivot_wider(
+    names_from  = prefix,
+    values_from = mean
+  ) %>%
+  left_join(
+    tibble(
+      row_id = 1:nrow(data_checked),
+      Element = data_checked$Element
+    ),
+    by = "row_id"
+  ) %>%
+  select(Element, everything(), -row_id)
+```
+
+```{r}
+# Define the row groups you want to sum
+rijgroepen <- list(
+  c(1, 2),
+  c(8, 9),
+  c(11, 12)
+)
+
+# Function to merge row groups (sum per column)
+samengevoegd <- lapply(rijgroepen, function(idx) {
+ # Select rows and sum all columns except 'Element'
+  rij_som <- data_mean[idx, ] %>%
+    select(-Element) %>%
+    summarise(across(everything(), ~ sum(.x, na.rm = TRUE)))
+  
+  # Create 'Element' name by concatenating names of merged rows
+  rij_som <- rij_som %>%
+    mutate(Element = paste(data_mean$Element[idx], collapse = "+")) %>%
+    select(Element, everything())
+  
+  rij_som
+})
+
+# Bind the merged rows together into one dataframe
+samengevoegde_rijen <- bind_rows(samengevoegd)
+
+# Determine which rows are not in a group
+gebruikte_rijen <- unlist(rijgroepen)
+overige_rijen <- data_mean[-gebruikte_rijen, ]
+
+# Create the final dataframe with merged and remaining rows
+data_mean_final <- bind_rows(
+  samengevoegde_rijen,
+  overige_rijen
+) %>%
+  # Optional: sort by Element name
+  arrange(Element)
+```
+```{r}
+# Remove the 'Element' column, since you don't want to use it in calculations
+data_values <- data_mean_final %>% select(-Element)
+
+# Create a dataframe with the divisions (row 3 / row 2) and (row 3 / row 9)
+# Per column
+ratio_Ba_Ca <- data_values[2, ] / data_values[3, ]
+ratio_Sr_Ca <- data_values[9, ] / data_values[3, ]
+
+# Convert to dataframe and add a label as row name
+ratio_df <- bind_rows(
+  ratio_Ba_Ca = as.data.frame(ratio_Ba_Ca),
+  ratio_Sr_Ca = as.data.frame(ratio_Sr_Ca),
+  .id = "comparison"
+)
+
+# Optional: make 'comparison' column the row name
+ratio_df <- ratio_df %>%
+  select(comparison, everything())
+
+```
+
+```{r}
+#transpose the dataframes
+
+tprbc <- t(ratio_Ba_Ca)
+ratio_Ba_Ca_tp <- as.data.frame(tprbc)
+
+tprsc <- t(ratio_Sr_Ca)
+ratio_Sr_Ca_tp <- as.data.frame(tprsc)
+
+ratio_Ba_Ca_tp <- ratio_Ba_Ca_tp %>%
+  rename(Ratio = V1)
+
+ratio_Sr_Ca_tp <- ratio_Sr_Ca_tp %>%
+  rename(Ratio = V1)
+```
+
+```{r}
+#add genus names to dataframe
+
+ratio_Ba_Ca_tp$Genus <- c("Colobodus", "Nothosaurus", "Colobodus", "Saurichthys", "Nothosaurus", "Colobodus", "Acrodus", "Acrodus", "Gyrolepis", "Acrodus", "Saurichthys")
+
+ratio_Sr_Ca_tp$Genus <- c("Colobodus", "Nothosaurus", "Colobodus", "Saurichthys", "Nothosaurus", "Colobodus", "Acrodus", "Acrodus", "Gyrolepis", "Acrodus", "Saurichthys")
+```
+
+```{r}
+#add layers to data frames
+
+ratio_Ba_Ca_tp$Layer <- c("9", "10", "10", "45", "10", "9", "9", "9", "29", "29", "29")
+
+ratio_Sr_Ca_tp$Layer <- c("9", "10", "10", "45", "10", "9", "9", "9", "29", "29", "29")
+```
+
+```{r}
+library(ggplot2)
+
+#plot ratios
+
+ggplot(plot_data, aes(x = Sr*1000, y = Ba*1000, color = Genus, shape = Layer)) +
+  geom_point(size = 2.5) +
+  labs(
+    x = "Sr/Ca Ratio × 1000",
+    y = "Ba/Ca Ratio × 1000",
+    color = "Genus",
+    shape = "Layer"
+  ) +
+  theme_bw(base_size = 13) +
+  scale_shape_manual(values = c(
+    "9" = 15,
+    "10" = 16,
+    "29" = 17,
+    "45" = 18
+  )) +
+  scale_color_manual(
+    values = c(
+      "Acrodus" = "#d7191c",
+      "Colobodus" = "#fdae61",
+      "Gyrolepis" = "#800080",
+      "Nothosaurus" = "#abd9e9",
+      "Saurichthys" = "#2c7bb6"
+    ),
+    labels = c(
+      expression(italic("Acrodus")),
+      expression(italic("Colobodus")),
+      expression(italic("Gyrolepis")),
+      expression(italic("Nothosaurus")),
+      expression(italic("Saurichthys"))
+    )
+  )
+  
+```
+
+```{r}
+#plot data without outlier
+
+library(ggpmisc)
+
+ggplot(plot_data_no4, aes(x = Sr*1000, y = Ba*1000, color = Genus, shape = Layer)) +
+  geom_smooth(aes(x = Sr*1000, y = Ba*1000), method = "lm", color = "black", inherit.aes = FALSE, size = 0.5, fill = "#eeeeee") +
+  stat_poly_eq(
+  aes(x = Sr*1000, y = Ba*1000, label = paste(..eq.label.., ..rr.label.., sep = "~~~"), group = 1),
+  formula = y ~ x,
+  parse = TRUE,
+  label.x.npc = "left", label.y.npc = 0.9,
+  color = "black"
+  ) +
+  geom_point(size = 2.5) +
+  labs(x = "Sr/Ca Ratio × 1000", y = "Ba/Ca Ratio × 1000", color = "Genus", shape = "Layer") +
+  theme_bw(base_size = 13) +
+  scale_shape_manual(values = c(
+    "9" = 15,
+    "10" = 16,
+    "29" = 17
+  )) +
+  scale_color_manual(
+    values = c(
+      "Acrodus" = "#d7191c",
+      "Colobodus" = "#fdae61",
+      "Gyrolepis" = "#800080",
+      "Nothosaurus" = "#abd9e9",
+      "Saurichthys" = "#2c7bb6"
+    ),
+    labels = c(
+      expression(italic("Acrodus")),
+      expression(italic("Colobodus")),
+      expression(italic("Gyrolepis")),
+      expression(italic("Nothosaurus")),
+      expression(italic("Saurichthys"))
+    )
+  )
+```
+
+```{r}
+ggplot(plot_data_no4, aes(x = Sr*1000, y = Ba*1000, color = Genus, shape = Layer)) +
+  geom_smooth(
+    aes(x = Sr*1000, y = Ba*1000),
+    method = "lm",
+    color = "black",
+    inherit.aes = FALSE,
+    size = 0.5,
+    fill = "#eeeeee"
+  ) +
+  stat_poly_eq(
+  aes(x = Sr*1000, y = Ba*1000, label = paste(..eq.label.., ..rr.label.., sep = "~~~"), group = 1),
+  formula = y ~ x,
+  parse = TRUE,
+  label.x.npc = "left", label.y.npc = 0.9,
+  color = "black"
+  ) +
+  geom_point(size = 2.5) +
+  labs(x = "log(Sr/Ca Ratio × 1000)", y = "log(Ba/Ca Ratio × 1000)", color = "Genus", shape = "Layer") +
+  theme_bw(base_size = 13) +
+  scale_shape_manual(values = c(
+    "9" = 15,
+    "10" = 16,
+    "29" = 17
+  )) +
+  scale_color_manual(
+    values = c(
+      "Acrodus" = "#d7191c",
+      "Colobodus" = "#fdae61",
+      "Gyrolepis" = "#800080",
+      "Nothosaurus" = "#abd9e9",
+      "Saurichthys" = "#2c7bb6"
+    ),
+    labels = c(
+      expression(italic("Acrodus")),
+      expression(italic("Colobodus")),
+      expression(italic("Gyrolepis")),
+      expression(italic("Nothosaurus")),
+      expression(italic("Saurichthys"))
+    )
+  ) +
+  scale_x_continuous(trans = "log10") +
+  scale_y_continuous(trans = "log10")
+```
+
+```{r}
+ggplot(plot_data_no4, aes(x = Sr*1000, y = Ba*1000, color = Genus, shape = Layer)) +
+  geom_smooth(
+    aes(x = Sr*1000, y = Ba*1000),
+    method = "lm",
+    color = "black",
+    inherit.aes = FALSE,
+    size = 0.5,
+    fill = "#eeeeee"
+  ) +
+  geom_point(size = 2.5) +
+  labs(x = "log(Sr/Ca Ratio × 1000)", y = "log(Ba/Ca Ratio × 1000)", color = "Genus", shape = "Layer") +
+  theme_bw(base_size = 13) +
+  scale_shape_manual(values = c(
+    "9" = 15,
+    "10" = 16,
+    "29" = 17
+  )) +
+  scale_color_manual(
+    values = c(
+      "Acrodus" = "#d7191c",
+      "Colobodus" = "#fdae61",
+      "Gyrolepis" = "#800080",
+      "Nothosaurus" = "#abd9e9",
+      "Saurichthys" = "#2c7bb6"
+    ),
+    labels = c(
+      expression(italic("Acrodus")),
+      expression(italic("Colobodus")),
+      expression(italic("Gyrolepis")),
+      expression(italic("Nothosaurus")),
+      expression(italic("Saurichthys"))
+    )
+  ) +
+  scale_x_continuous(trans = "log10") +
+  scale_y_continuous(trans = "log10")
+```
+
+```{r}
+#plot Sr spread per genus
+
+ggplot(plot_data, aes(x = Genus, y = Sr*1000)) +
+  geom_point() +
+  labs(y = "Sr/Ca Ratio × 1000") +
+  theme_bw() +
+  scale_x_discrete(labels = c(
+    "Acrodus" = expression(italic("Acrodus")),
+    "Colobodus" = expression(italic("Colobodus")),
+    "Gyrolepis" = expression(italic("Gyrolepis")),
+    "Nothosaurus" = expression(italic("Nothosaurus")),
+    "Saurichthys" = expression(italic("Saurichthys"))
+  ))
+```
+
+```{r}
+#plot Ba spread per genus
+
+ggplot(plot_data, aes(x = Genus, y = Ba * 1000)) +
+  geom_point(data = subset(plot_data, Genus %in% c("Gyrolepis", "Nothosaurus", "Saurichthys"))) +
+
+  geom_jitter(data = subset(plot_data, Genus %in% c("Acrodus", "Colobodus")), width = 0.05) +
+  labs(y = "Ba/Ca Ratio × 1000") +
+  theme_bw() +
+  scale_x_discrete(labels = c(
+  "Acrodus" = expression(italic("Acrodus")),
+  "Colobodus" = expression(italic("Colobodus")),
+  "Gyrolepis" = expression(italic("Gyrolepis")),
+  "Nothosaurus" = expression(italic("Nothosaurus")),
+  "Saurichthys" = expression(italic("Saurichthys"))
+  ))
+```
+
+```{r}
+#plot Sr spread per layer
+
+ggplot(plot_data, aes(x = Layer, y = Sr*1000)) +
+  geom_point() +
+  labs(y = "Sr/Ca Ratio × 1000") +
+  theme_bw()
+```
+
+```{r}
+#plot Ba spread per layer
+
+ggplot(plot_data, aes(x = Layer, y = Ba * 1000)) +
+  geom_jitter(data = subset(plot_data, Layer %in% c("9", "10")), width = 0.1) +
+  geom_point(data = subset(plot_data, Layer %in% c("29", "45"))) +
+  labs(y = "Ba/Ca Ratio × 1000") +
+  theme_bw()
+```
